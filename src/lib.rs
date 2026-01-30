@@ -536,6 +536,87 @@ impl ERC20Token {
         Ok(true)
     }
     
+    /// Burns `amount` tokens from `from` account on behalf of the caller
+    /// The caller must have allowance for `from`'s tokens of at least `amount`
+    pub fn burn_from(&mut self, from: Address, amount: U256) -> Result<bool, ERC20Error> {
+        let spender = msg::sender();
+        
+        // Check if contract is paused
+        if self.paused.get() {
+            return Err(ERC20Error::ContractPaused(ContractPaused {}));
+        }
+        
+        // Validate from address
+        if from == Address::ZERO {
+            return Err(ERC20Error::ZeroAddress(ZeroAddress {}));
+        }
+        
+        // Skip if amount is zero
+        if amount == U256::ZERO {
+            return Ok(true);
+        }
+        
+        // Check and update allowance
+        let current_allowance = self.allowances.getter(from).get(spender);
+        
+        // Check for sufficient allowance
+        if current_allowance < amount {
+            return Err(ERC20Error::InsufficientAllowance(
+                InsufficientAllowance {
+                    allowance: current_allowance,
+                    required: amount,
+                },
+            ));
+        }
+        
+        // Decrease allowance using checked subtraction
+        let new_allowance = current_allowance
+            .checked_sub(amount)
+            .ok_or(ERC20Error::InsufficientAllowance(
+                InsufficientAllowance {
+                    allowance: current_allowance,
+                    required: amount,
+                },
+            ))?;
+        
+        self.allowances.setter(from).setter(spender).set(new_allowance);
+        
+        // Check balance and burn
+        let current_balance = self.balances.get(from);
+        if current_balance < amount {
+            return Err(ERC20Error::InsufficientBalance(InsufficientBalance {
+                balance: current_balance,
+                required: amount,
+            }));
+        }
+        
+        // Update balance with underflow check
+        let new_balance = current_balance
+            .checked_sub(amount)
+            .ok_or(ERC20Error::InsufficientBalance(InsufficientBalance {
+                balance: current_balance,
+                required: amount,
+            }))?;
+        
+        // Update total supply
+        let current_supply = self.total_supply.get();
+        let new_supply = current_supply
+            .checked_sub(amount)
+            .ok_or(ERC20Error::InvalidAmount(InvalidAmount {}))?;
+        
+        self.balances.setter(from).set(new_balance);
+        self.total_supply.set(new_supply);
+        
+        // Emit Transfer event to zero address (burn)
+        evm::log(Transfer {
+            from,
+            to: Address::ZERO,
+            amount,
+        });
+        
+        Ok(true)
+    }
+    
     // ========================================================================
     // OWNERSHIP MANAGEMENT
     // ========================================================================
@@ -582,6 +663,27 @@ impl ERC20Token {
         }
         
         Ok(())
+    }
+    
+    /// Leaves the contract without an owner
+    /// After renouncing ownership, owner will be Address::ZERO
+    /// Cannot be called if the current owner is Address::ZERO
+    pub fn renounce_ownership(&mut self) -> Result<bool, ERC20Error> {
+        // Check ownership
+        self.only_owner()?;
+        
+        let previous_owner = self.owner.get();
+        
+        // Set owner to zero address
+        self.owner.set(Address::ZERO);
+        
+        // Emit ownership transfer event
+        evm::log(OwnershipTransferred {
+            previous_owner,
+            new_owner: Address::ZERO,
+        });
+        
+        Ok(true)
     }
     
     // ========================================================================
@@ -638,6 +740,7 @@ impl ERC20Token {
 
 // ============================================================================
 // UNIT TESTS
+// Note: Full contract tests require Stylus VM and are in tests/erc20_tests.rs
 // ============================================================================
 
 #[cfg(test)]
@@ -654,51 +757,55 @@ mod tests {
     const DECIMALS: u8 = 18;
     const INITIAL_SUPPLY: u128 = 1_000_000 * 10u128.pow(DECIMALS as u32);
 
+    // ============================================================================
+    // BASIC TYPE AND OPERATION TESTS
+    // ============================================================================
+
     #[test]
     fn test_address_operations() {
         // Test address creation and comparison
         let zero = Address::ZERO;
         assert_eq!(zero.0 .0, [0u8; 20]);
-        
+
         let addr1 = addr(1);
         let addr2 = addr(2);
-        
+
         assert_ne!(addr1, addr2);
         assert_ne!(addr1, zero);
         assert_ne!(addr2, zero);
-        
+
         // Test ordering
         assert!(addr1 < addr2);
         assert!(zero < addr1);
     }
-    
+
     #[test]
     fn test_u256_operations() {
         // Test U256 arithmetic operations
         let supply = U256::from(INITIAL_SUPPLY);
         let transfer_amount = U256::from(1000u64);
-        
+
         // Test subtraction
         let remaining = supply - transfer_amount;
         assert_eq!(remaining, supply - transfer_amount);
-        
+
         // Test addition
         let mint_amount = U256::from(500u64);
         let new_supply = supply + mint_amount;
         assert_eq!(new_supply, supply + mint_amount);
-        
+
         // Test comparison
         assert!(supply > transfer_amount);
         assert!(transfer_amount > mint_amount);
     }
-    
+
     #[test]
     fn test_decimals_constant() {
         assert_eq!(DECIMALS, 18);
         let expected_supply = 1_000_000 * 10u128.pow(18);
         assert_eq!(INITIAL_SUPPLY, expected_supply);
     }
-    
+
     #[test]
     fn test_u256_from_types() {
         let from_u8 = U256::from(42u8);
@@ -706,34 +813,34 @@ mod tests {
         let from_u32 = U256::from(42u32);
         let from_u64 = U256::from(42u64);
         let from_u128 = U256::from(42u128);
-        
+
         assert_eq!(from_u8, from_u16);
         assert_eq!(from_u16, from_u32);
         assert_eq!(from_u32, from_u64);
         assert_eq!(from_u64, from_u128);
     }
-    
+
     #[test]
     fn test_u256_zero_check() {
         let zero = U256::ZERO;
         let non_zero = U256::from(100u64);
-        
+
         assert!(zero == U256::ZERO);
         assert!(!(non_zero == U256::ZERO));
     }
-    
+
     #[test]
     fn test_address_from_slice() {
         let empty = Address::from([0u8; 20]);
         assert_eq!(empty, Address::ZERO);
-        
+
         let addr1 = Address::from([1u8; 20]);
         let addr255 = Address::from([255u8; 20]);
-        
+
         assert_ne!(addr1, addr255);
         assert_ne!(addr1, empty);
     }
-    
+
     #[test]
     fn test_error_types_compile() {
         // Verify error types are properly defined
@@ -741,20 +848,20 @@ mod tests {
             balance: U256::ZERO,
             required: U256::from(100),
         });
-        
+
         let _insufficient_allowance = ERC20Error::InsufficientAllowance(InsufficientAllowance {
             allowance: U256::ZERO,
             required: U256::from(100),
         });
-        
+
         let _zero_address = ERC20Error::ZeroAddress(ZeroAddress {});
-        
+
         let _not_owner = ERC20Error::NotOwner(NotOwner {
             caller: Address::ZERO,
             owner: Address::ZERO,
         });
     }
-    
+
     #[test]
     fn test_event_types_compile() {
         // Verify event types are properly defined
@@ -763,22 +870,117 @@ mod tests {
             to: addr(1),
             amount: U256::from(1000),
         };
-        
+
         let approval_event = Approval {
             owner: addr(1),
             spender: addr(2),
             amount: U256::from(500),
         };
-        
+
         let ownership_event = OwnershipTransferred {
             previous_owner: Address::ZERO,
             new_owner: addr(1),
         };
-        
+
         // Events should be constructible
         assert_ne!(transfer_event.from, transfer_event.to);
         assert_ne!(approval_event.owner, approval_event.spender);
         assert_eq!(ownership_event.previous_owner, Address::ZERO);
     }
-    
+
+    // ============================================================================
+    // SUPPLY CALCULATION TESTS
+    // ============================================================================
+
+    #[test]
+    fn test_supply_calculations() {
+        // Test with 18 decimals
+        let decimals_18: u8 = 18;
+        let supply_18: u128 = 1_000_000 * 10u128.pow(decimals_18 as u32);
+        assert_eq!(supply_18, 1_000_000_000_000_000_000_000_000u128);
+
+        // Test with 6 decimals
+        let decimals_6: u8 = 6;
+        let supply_6: u128 = 1_000_000 * 10u128.pow(decimals_6 as u32);
+        assert_eq!(supply_6, 1_000_000_000_000u128);
+
+        // Large supply
+        let large_supply: u128 = 1_000_000_000 * 10u128.pow(18);
+        assert_eq!(large_supply, 1_000_000_000_000_000_000_000_000_000u128);
+    }
+
+    // ============================================================================
+    // U256 ARITHMETIC TESTS
+    // ============================================================================
+
+    #[test]
+    fn test_u256_checked_add() {
+        // u64::MAX is within U256 range, so adding 1 won't overflow U256
+        let a = U256::from(u64::MAX);
+        let b = U256::from(1u64);
+        let result = a.checked_add(b);
+        assert!(result.is_some()); // No overflow in U256
+
+        let c = U256::from(100u64);
+        let d = U256::from(200u64);
+        let result = c.checked_add(d);
+        assert_eq!(result, Some(U256::from(300u64)));
+    }
+
+    #[test]
+    fn test_u256_checked_sub() {
+        let a = U256::from(100u64);
+        let b = U256::from(50u64);
+        let result = a.checked_sub(b);
+        assert_eq!(result, Some(U256::from(50u64)));
+
+        let c = U256::from(50u64);
+        let d = U256::from(100u64);
+        let result = c.checked_sub(d);
+        assert!(result.is_none()); // Underflow
+    }
+
+    #[test]
+    fn test_u256_max_values() {
+        let max = U256::MAX;
+        let one = U256::from(1u64);
+        let result = max.checked_add(one);
+        assert!(result.is_none()); // Overflow
+
+        let result = max.checked_sub(one);
+        assert!(result.is_some());
+    }
+
+    // ============================================================================
+    // ADDRESS COMPARISON TESTS
+    // ============================================================================
+
+    #[test]
+    fn test_address_comparison() {
+        let a = addr(1);
+        let b = addr(2);
+        let zero = Address::ZERO;
+
+        assert!(a < b);
+        assert!(a > zero);
+        assert!(zero < a);
+        assert!(a != b);
+        assert!(a == a);
+    }
+
+    // ============================================================================
+    // TOKEN METADATA VALIDATION TESTS
+    // ============================================================================
+
+    #[test]
+    fn test_token_decimals_validation() {
+        // Valid decimals (18^1 = 18, 18^2 = 324 which is > 255 for u8)
+        assert_eq!(18u8.pow(1), 18);
+
+        // Supply calculations (10^18 = 1 followed by 18 zeros)
+        let supply = 1_000_000u128;
+        let decimals = 18;
+        let expected = supply * 10u128.pow(decimals);
+        assert_eq!(expected, 1_000_000_000_000_000_000_000_000u128);
+    }
 }
