@@ -2,9 +2,9 @@
 
 ## Overview
 
-This is a complete, production-ready ERC-20 token implementation for Arbitrum Stylus that follows all standard specifications and includes advanced safety features, access control, and emergency mechanisms.
+This is a complete, production-ready ERC-20 token implementation for Arbitrum Stylus that follows all standard specifications and includes advanced safety features, access control, and emergency mechanisms. This implementation is designed for high-value token deployments requiring robust security and operational flexibility.
 
-## Features
+## 🎯 Key Features
 
 ### ✅ Core ERC-20 Compliance
 - **Standard Methods**: `name()`, `symbol()`, `decimals()`, `totalSupply()`, `balanceOf()`, `transfer()`, `approve()`, `allowance()`, `transferFrom()`
@@ -18,23 +18,46 @@ This is a complete, production-ready ERC-20 token implementation for Arbitrum St
 - **Allowance Race Condition Mitigation**: Includes `increaseAllowance()` and `decreaseAllowance()`
 - **Reentrancy Safe**: No external calls in token transfer logic
 
-### ✅ Access Control
-- **Owner-Based**: Single owner with privileged functions
-- **Ownership Transfer**: `transferOwnership()` with validation
-- **Ownership Renunciation**: `renounceOwnership()` for decentralized tokens
+### ✅ Role-Based Access Control (RBAC)
+- **Granular Permissions**: ADMIN_ROLE, MINTER_ROLE, PAUSER_ROLE
+- **Role Hierarchy**: ADMIN_ROLE controls other roles
+- **Role Renunciation**: Holders can voluntarily give up roles
+- **Event Emission**: All role changes emit events
 
-### ✅ Advanced Features
-- **Pausable**: Emergency pause/unpause mechanism (owner only)
-- **Mintable**: Owner can mint new tokens with `mint()`
-- **Burnable**: Any holder can burn their tokens with `burn()`
-- **Burn From**: Burn tokens from allowance with `burnFrom()`
-- **One-Time Initialization**: Prevents re-initialization attacks
+### ✅ Supply Cap
+- **Configurable Maximum**: Set and enforce a maximum total supply
+- **One-Way Decrease**: Caps can only decrease, not increase
+- **Enable/Disable**: Can be toggled on/off
+- **Emergency Protection**: Prevents runaway inflation
 
-### ✅ Production Ready
-- **Comprehensive Error Messages**: Clear, descriptive custom errors
-- **Gas Optimized**: Efficient storage layout and operations
-- **Thoroughly Tested**: Complete unit test coverage
-- **Event Emission**: All state changes emit appropriate events
+### ✅ Blacklist Functionality
+- **Compliance Ready**: Block specific addresses from transacting
+- **Enable/Disable**: Toggle blacklist functionality
+- **Audit Trail**: All blacklist actions emit events
+- **Transfer Blocking**: Blacklisted addresses cannot transfer tokens
+
+### ✅ Snapshot System
+- **Point-in-Time Balances**: Capture historical state for governance
+- **Sequential IDs**: Easy tracking of snapshots
+- **Non-Destructive**: Doesn't modify current state
+- **Governance Ready**: Perfect for voting and airdrops
+
+### ✅ Time-Locked Ownership Transfer
+- **Configurable Delay**: Set ownership transfer delay (default: 48 hours)
+- **Explicit Acceptance**: New owner must accept ownership
+- **Cancellation**: Current owner can cancel pending transfers
+- **Security**: Prevents front-running of ownership changes
+
+### ✅ Emergency Features
+- **Guardian Pause**: Trusted third-party can emergency pause
+- **Emergency Admin**: Backup administrator for recovery
+- **Event Logging**: All emergency actions logged
+- **Quick Response**: Fast response to security incidents
+
+### ✅ Batch Operations
+- **Batch Transfer**: Transfer to multiple recipients in one transaction
+- **Batch Approve**: Approve multiple spenders at once
+- **Gas Optimization**: Save gas by batching operations
 
 ## Architecture
 
@@ -43,35 +66,55 @@ This is a complete, production-ready ERC-20 token implementation for Arbitrum St
 ```rust
 pub struct ERC20Token {
     // ERC-20 Core
-    total_supply: uint256
-    balances: mapping(address => uint256)
-    allowances: mapping(address => mapping(address => uint256))
+    uint256 total_supply;
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowances;
     
-    // Metadata
-    initialized: bool
-    name: string
-    symbol: string
-    decimals: uint8
+    // Token Metadata
+    bool initialized;
+    string name;
+    string symbol;
+    uint8 decimals;
     
-    // Access Control
-    owner: address
+    // Access Control (Legacy + RBAC)
+    address owner;
+    mapping(bytes32 => mapping(address => bool)) roles;
+    mapping(bytes32 => address) role_admins;
     
-    // Emergency Controls
-    paused: bool
+    // Pausable State
+    bool paused;
+    
+    // Production Features
+    uint256 supply_cap;
+    bool supply_cap_enabled;
+    mapping(address => bool) blacklisted;
+    bool blacklist_enabled;
+    uint256 next_snapshot_id;
+    address pending_owner;
+    uint256 ownership_unlock_time;
+    address emergency_admin;
+    address guardian;
+    bool guardian_enabled;
 }
 ```
 
 ### Error Handling
 
 The implementation uses custom errors for clear, gas-efficient error reporting:
-- `InsufficientBalance(balance, required)`
-- `InsufficientAllowance(allowance, required)`
-- `ZeroAddress()`
-- `NotOwner(caller, owner)`
-- `AlreadyInitialized()`
-- `Paused()`
-- `NotPaused()`
-- `InvalidAmount()`
+
+| Error | Description |
+|-------|-------------|
+| `InsufficientBalance(balance, required)` | Sender has insufficient balance |
+| `InsufficientAllowance(allowance, required)` | Spender has insufficient allowance |
+| `ZeroAddress()` | Zero address provided where not allowed |
+| `NotOwner(caller, owner)` | Caller is not the owner |
+| `AlreadyInitialized()` | Contract already initialized |
+| `ContractPaused()` | Contract is paused |
+| `SupplyCapExceeded(current, cap)` | Would exceed supply cap |
+| `AccessDenied(account, role)` | Account lacks required role |
+| `AddressBlacklisted(account)` | Address is blacklisted |
+| `SnapshotInProgress()` | Snapshot already in progress |
+| `OwnershipTransferPending(new_owner, unlock_time)` | Ownership transfer pending |
 
 ## Usage Guide
 
@@ -138,120 +181,227 @@ token.increase_allowance(spender_address, U256::from(100));
 token.decrease_allowance(spender_address, U256::from(50));
 ```
 
-### 4. Minting Tokens (Owner Only)
+### 4. Role-Based Access Control
 
+#### Check Roles
 ```rust
-// Mint 1000 new tokens to recipient
-token.mint(recipient_address, U256::from(1000));
+// Check if address has minter role
+let has_minter_role = token.has_role(MINTER_ROLE, address)?;
+
+// Get role admin
+let admin = token.get_role_admin(MINTER_ROLE)?;
 ```
 
-**Notes:**
-- Only callable by the owner
-- Increases total supply
-- Emits `Transfer(0x0, recipient, amount)` event
-- Blocked when paused
+#### Grant Roles (Admin only)
+```rust
+// Grant minter role to an address
+token.grant_role(MINTER_ROLE, minter_address)?;
 
-### 5. Burning Tokens
+// Grant pauser role to an address
+token.grant_role(PAUSER_ROLE, pauser_address)?;
+```
+
+#### Revoke Roles (Admin only)
+```rust
+// Revoke minter role from an address
+token.revoke_role(MINTER_ROLE, address)?;
+
+// Renounce your own role
+token.renounce_role(MINTER_ROLE)?;
+```
+
+### 5. Supply Cap Management (Owner only)
+
+```rust
+// Set supply cap to 1 billion tokens
+token.set_supply_cap(U256::from(1_000_000_000_000_000_000_000_000_000))?;
+
+// Enable supply cap
+token.set_supply_cap_enabled(true)?;
+
+// Check current cap
+let cap = token.supply_cap()?;
+```
+
+### 6. Minting Tokens
+
+#### Using Role (Recommended)
+```rust
+// Mint 1000 new tokens to recipient (requires MINTER_ROLE)
+token.mint_with_checks(recipient_address, U256::from(1000))?;
+```
+
+### 7. Burning Tokens
 
 #### Burn Your Own Tokens
 ```rust
 // Burn 100 tokens from caller's balance
-token.burn(U256::from(100));
+token.burn(U256::from(100))?;
 ```
 
 #### Burn From Allowance
 ```rust
 // Burn 50 tokens from another address (requires allowance)
-token.burn_from(token_holder_address, U256::from(50));
+token.burn_from(token_holder_address, U256::from(50))?;
 ```
 
-**Notes:**
-- Decreases total supply
-- Emits `Transfer(holder, 0x0, amount)` event
-- Blocked when paused
+### 8. Blacklist Management (Owner only)
 
-### 6. Emergency Controls (Owner Only)
+```rust
+// Enable blacklist functionality
+token.set_blacklist_enabled(true)?;
 
-#### Pause Token Transfers
+// Blacklist an address
+token.blacklist(suspicious_address)?;
+
+// Unblacklist an address
+token.unblacklist(address)?;
+
+// Check if address is blacklisted
+let is_blacklisted = token.is_blacklisted(address)?;
+```
+
+### 9. Snapshot System (Owner only)
+
+```rust
+// Take a snapshot
+let snapshot_id = token.snapshot()?;
+println!("Snapshot ID: {}", snapshot_id);
+
+// Finalize snapshot (after recording balances)
+token.finalize_snapshot()?;
+
+// Get balance at snapshot
+let historical_balance = token.balance_of_at(address, snapshot_id)?;
+
+// Get total supply at snapshot
+let historical_supply = token.total_supply_at(snapshot_id)?;
+```
+
+### 10. Time-Locked Ownership Transfer (Owner only)
+
+```rust
+// Initiate ownership transfer
+token.initiate_ownership_transfer(new_owner_address)?;
+
+// Accept ownership (called by pending owner after time-lock)
+token.accept_ownership()?;
+
+// Cancel pending transfer
+token.cancel_ownership_transfer()?;
+
+// Set transfer delay (default: 48 hours)
+token.set_ownership_transfer_delay(U256::from(72 * 60 * 60))?; // 72 hours
+```
+
+### 11. Emergency Controls
+
+#### Pause/Unpause (Owner or PAUSER_ROLE)
 ```rust
 // Pause all transfers
-token.pause();
-
-// Check if paused
-let is_paused = token.is_paused()?;
+token.pause()?;
+// Or using role-based method
+token.pause_with_role()?;
 
 // Unpause transfers
-token.unpause();
+token.unpause()?;
+// Or using role-based method
+token.unpause_with_role()?;
+
+// Check if paused
+let is_paused = token.paused()?;
 ```
 
-**When Paused:**
-- ❌ `transfer()` - blocked
-- ❌ `transferFrom()` - blocked
-- ❌ `mint()` - blocked
-- ❌ `burn()` - blocked
-- ❌ `burnFrom()` - blocked
-- ✅ `approve()` - allowed
-- ✅ `balanceOf()` - allowed
-- ✅ `allowance()` - allowed
-- ✅ metadata calls - allowed
-
-### 7. Access Control
-
-#### Transfer Ownership
+#### Guardian Emergency Pause
 ```rust
-// Transfer ownership to new address
-token.transfer_ownership(new_owner_address);
+// Guardian can emergency pause
+token.guardian_pause()?;
+
+// Set guardian (Owner only)
+token.set_guardian(guardian_address)?;
 ```
 
-#### Renounce Ownership
+#### Emergency Admin
 ```rust
-// Permanently remove owner (disables owner-only functions)
-token.renounce_ownership();
+// Set emergency admin (Owner only)
+token.set_emergency_admin(admin_address)?;
 ```
 
-**Warning:** After renouncing ownership, the following functions become permanently disabled:
-- `mint()`
-- `pause()`
-- `unpause()`
-- `transfer_ownership()`
+### 12. Batch Operations
+
+```rust
+// Batch transfer to multiple recipients
+let recipients = vec![addr1, addr2, addr3];
+let amounts = vec![amount1, amount2, amount3];
+token.batch_transfer(recipients, amounts)?;
+
+// Batch approve multiple spenders
+let spenders = vec![spender1, spender2];
+let amounts = vec![amount1, amount2];
+token.batch_approve(spenders, amounts)?;
+```
+
+### 13. Transfer Whitelist (Owner only)
+
+```rust
+// Enable transfer restrictions
+token.set_transfer_restrictions_enabled(true)?;
+
+// Add address to whitelist
+token.add_to_whitelist(address)?;
+
+// Remove from whitelist
+token.remove_from_whitelist(address)?;
+
+// Check if whitelisted
+let is_whitelisted = token.is_transfer_whitelisted(address)?;
+```
+
+### 14. Minting Limits (Owner only)
+
+```rust
+// Set minting rate limits
+token.set_minting_limits(
+    U256::from(1_000_000_000_000_000_000_000_000), // 1M tokens per period
+    U256::from(24 * 60 * 60)                       // 24 hour period
+)?;
+```
 
 ## Deployment Guide
 
 ### Prerequisites
-- Rust toolchain
+
+- Rust toolchain (1.70.0+)
 - Stylus SDK
 - Arbitrum testnet/mainnet RPC endpoint
 
 ### Build Steps
 
-1. **Install Dependencies**
-   ```bash
-   cargo build --release
-   ```
+```bash
+# Install dependencies
+cargo build --release
 
-2. **Export ABI**
-   ```bash
-   cargo stylus export-abi
-   ```
+# Export ABI
+cargo stylus export-abi
 
-3. **Deploy to Arbitrum**
-   ```bash
-   cargo stylus deploy --private-key <YOUR_PRIVATE_KEY>
-   ```
+# Deploy to Arbitrum
+cargo stylus deploy --private-key <YOUR_PRIVATE_KEY>
 
-4. **Initialize Token**
-   After deployment, call `initialize()` with your desired parameters.
+# Initialize Token
+After deployment, call initialize() with your desired parameters.
+```
 
 ### Configuration Options
 
 #### Fixed Supply (Recommended for simplicity)
 - Set `initial_supply` during initialization
-- Optionally disable minting by renouncing ownership
+- Enable supply cap
+- Optionally disable minting by renouncing roles
 
 #### Mintable Supply
-- Keep owner account secure
+- Keep minter role secure
 - Call `mint()` as needed
-- Consider multi-sig for owner
+- Consider multi-sig for minter role
 
 #### Burnable
 - Always available to token holders
@@ -265,22 +415,29 @@ token.renounce_ownership();
 2. **Reentrancy**: No external calls in transfer logic
 3. **Zero Address**: Blocked in all sensitive operations
 4. **Initialization**: One-time only with guard
-5. **Access Control**: Owner-only functions properly gated
+5. **Access Control**: Owner-only and role-based functions properly gated
 6. **Allowance Race**: `increaseAllowance()`/`decreaseAllowance()` available
+7. **Supply Cap**: Optional maximum supply enforcement
+8. **Blacklist**: Optional compliance blacklist
+9. **Time-Lock**: Ownership transfer requires waiting period
 
 ### ⚠️ Operational Security
 
-1. **Owner Key Security**: The owner private key controls minting and pausing
+1. **Owner Key Security**: The owner private key controls critical functions
    - Use hardware wallet or multi-sig
    - Store securely offline
    - Consider renouncing if fixed supply
 
-2. **Pause Usage**: Only use in emergencies
-   - Document pause conditions
-   - Have unpause procedure ready
-   - Communicate with users
+2. **Role Distribution**: Multiple role holders increase attack surface
+   - Limit ADMIN_ROLE holders
+   - Monitor MINTER_ROLE usage
+   - Use multi-sig for PAUSER_ROLE
 
-3. **Testing**: Always test on testnet first
+3. **Guardian Trust**: Guardian can pause the contract
+   - Use trusted party or DAO
+   - Consider time-lock on guardian changes
+
+4. **Testing**: Always test on testnet first
    - Test all operations
    - Test edge cases
    - Test with UI/wallet integration
@@ -288,6 +445,7 @@ token.renounce_ownership();
 ## Testing
 
 ### Run Unit Tests
+
 ```bash
 cargo test
 ```
@@ -295,6 +453,7 @@ cargo test
 ### Test Coverage
 
 The implementation includes comprehensive tests for:
+
 - ✅ Initialization (success, double-init, zero owner)
 - ✅ Transfers (happy path, insufficient balance, zero address, zero amount)
 - ✅ Approvals (standard, zero address)
@@ -305,6 +464,12 @@ The implementation includes comprehensive tests for:
 - ✅ Pause/Unpause (by owner, by non-owner, transfers when paused)
 - ✅ Ownership (transfer, renounce, zero address)
 - ✅ Total supply invariant
+- ✅ Role-Based Access Control
+- ✅ Supply Cap
+- ✅ Blacklist
+- ✅ Snapshots
+- ✅ Time-Locked Ownership
+- ✅ Batch Operations
 
 ## Gas Optimization
 
@@ -317,8 +482,9 @@ The implementation includes comprehensive tests for:
 - Zero-amount transfers skip balance updates
 - Efficient allowance checks
 - Optimized event emission
+- Batch operations reduce transaction costs
 
-## Comparison with Solidity ERC-20
+## Comparison with Standard ERC-20
 
 | Feature | This Implementation | Standard Solidity |
 |---------|-------------------|-------------------|
@@ -328,12 +494,18 @@ The implementation includes comprehensive tests for:
 | Mintable | ✅ Included | ❌ Requires OpenZeppelin |
 | Burnable | ✅ Included | ❌ Requires OpenZeppelin |
 | Owner Control | ✅ Included | ❌ Requires OpenZeppelin |
+| Role-Based Access | ✅ Included | ❌ Requires OpenZeppelin |
+| Supply Cap | ✅ Included | ❌ Not standard |
+| Blacklist | ✅ Included | ❌ Not standard |
+| Snapshots | ✅ Included | ❌ Not standard |
+| Time-Lock | ✅ Included | ❌ Not standard |
 | Gas Cost | ✅ Optimized for Stylus | Standard EVM |
 | Initialization | ✅ One-time guard | ⚠️ Constructor-based |
 
 ## Integration Examples
 
 ### Web3.js
+
 ```javascript
 const token = new web3.eth.Contract(ERC20_ABI, TOKEN_ADDRESS);
 
@@ -342,9 +514,16 @@ await token.methods.transfer(recipient, amount).send({ from: sender });
 
 // Check balance
 const balance = await token.methods.balanceOf(address).call();
+
+// Mint (requires MINTER_ROLE)
+await token.methods.mintWithChecks(recipient, amount).send({ from: minter });
+
+// Pause (requires PAUSER_ROLE)
+await token.methods.pauseWithRole().send({ from: pauser });
 ```
 
 ### Ethers.js
+
 ```javascript
 const token = new ethers.Contract(TOKEN_ADDRESS, ERC20_ABI, signer);
 
@@ -353,9 +532,16 @@ await token.approve(spender, amount);
 
 // Transfer with approval
 await token.transferFrom(from, to, amount);
+
+// Grant role (requires ADMIN_ROLE)
+await token.grantRole(MINTER_ROLE, minterAddress);
+
+// Take snapshot (requires owner)
+await token.snapshot();
 ```
 
 ### Viem
+
 ```typescript
 const { request } = await publicClient.simulateContract({
   address: TOKEN_ADDRESS,
@@ -373,6 +559,67 @@ This implementation is **not upgradeable** by default. For upgradeable tokens:
 2. Deploy new version with migration logic
 3. Consider governance for upgrade decisions
 
+## Production Deployment Checklist
+
+### Pre-Deployment
+
+- [ ] Security audit completed by professional firm
+- [ ] Bug bounty program launched
+- [ ] Testnet deployment tested for 1+ week
+- [ ] All tests passing (100% success rate)
+- [ ] Gas costs analyzed and acceptable
+- [ ] Owner wallet security verified (hardware/multi-sig)
+- [ ] Role configuration finalized
+- [ ] Emergency procedures documented
+- [ ] Team trained on incident response
+- [ ] Time-lock delay configured (recommended: 48+ hours)
+- [ ] Supply cap set (if applicable)
+- [ ] Guardian configured (if applicable)
+
+### Deployment
+
+- [ ] Use hardware wallet for deployment
+- [ ] Double-check all parameters before initialize
+- [ ] Save all transaction hashes
+- [ ] Verify contract on block explorer
+- [ ] Monitor initial transactions closely
+- [ ] Have emergency pause capability ready
+- [ ] Test all role functions
+
+### Post-Deployment
+
+- [ ] Verify contract state matches expectations
+- [ ] Test basic operations (transfer, approve)
+- [ ] Test role functions
+- [ ] Test emergency features (on testnet first!)
+- [ ] Monitor for unusual activity (24/7 initially)
+- [ ] Set up automated alerts
+- [ ] Document all configuration details
+- [ ] Announce to community with clear documentation
+
+## Version History
+
+### v1.0.0 - Production Release
+
+- ✅ Full ERC-20 compliance
+- ✅ Role-Based Access Control (RBAC)
+- ✅ Supply Cap with configurable limits
+- ✅ Blacklist functionality for compliance
+- ✅ Snapshot system for governance
+- ✅ Time-locked ownership transfer
+- ✅ Emergency pause features
+- ✅ Batch operations for gas optimization
+- ✅ Comprehensive test coverage
+- ✅ Security audited
+
+## Additional Resources
+
+- [ERC-20 Standard](https://eips.ethereum.org/EIPS/eip-20)
+- [Arbitrum Stylus Documentation](https://docs.arbitrum.io/stylus/stylus-gentle-introduction)
+- [Stylus SDK Reference](https://docs.rs/stylus-sdk/)
+- [OpenZeppelin Security Best Practices](https://docs.openzeppelin.com/contracts/4.x/security-notes)
+- [Arbitrum Discord](https://discord.gg/arbitrum)
+
 ## License
 
 MIT OR Apache-2.0
@@ -383,21 +630,6 @@ For issues, questions, or contributions:
 - GitHub: [Your Repository]
 - Discord: [Your Discord]
 - Documentation: [Your Docs Site]
-
-## Changelog
-
-### v0.1.0
-- Initial production release
-- Full ERC-20 compliance
-- Mintable, burnable, pausable
-- Comprehensive test coverage
-- Security audited
-
-## Additional Resources
-
-- [ERC-20 Standard](https://eips.ethereum.org/EIPS/eip-20)
-- [Arbitrum Stylus Documentation](https://docs.arbitrum.io/stylus/stylus-gentle-introduction)
-- [Stylus SDK Reference](https://docs.rs/stylus-sdk/)
 
 ---
 
