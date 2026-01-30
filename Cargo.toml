@@ -1,6 +1,63 @@
 [package]
-name = "my_token"
-version = "0.1.0"
-edition = "2024"
+name = "stylus-erc20"
+version = "1.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/pyroblazer/arbitrum-erc20"
+repository = "https://github.com/pyroblazer/arbitrum-erc20"
+keywords = [
+  "arbitrum",
+  "stylus",
+  "erc20",
+  "ethereum",
+  "token",
+  "smart-contract",
+  "alloy"
+]
+categories = ["cryptography::cryptocurrencies", "blockchain"]
+description = "Production-grade ERC-20 token implementation for Arbitrum Stylus, following the ERC-20 standard with safety checks, access control, and best practices."
 
 [dependencies]
+# Core Stylus SDK
+stylus-sdk = { version = "0.9.0", features = ["stylus-test"] }
+
+# Alloy primitives & Solidity-compatible types
+alloy-primitives = "=0.8.20"
+alloy-sol-types = "=0.8.20"
+
+# Utility
+hex = { version = "0.4", default-features = false }
+
+[dev-dependencies]
+# Required for hashing & test utilities
+alloy-primitives = { version = "=0.8.20", features = ["sha3-keccak"] }
+
+# Async runtime for integration & e2e tests
+tokio = { version = "1.12.0", features = ["full"] }
+
+# Environment variable support for testnet/mainnet configs
+dotenv = "0.15.0"
+
+[features]
+default = ["mini-alloc"]
+
+# ABI export for frontend / contract integration
+export-abi = ["stylus-sdk/export-abi"]
+
+# Enable debug helpers (disable for production)
+debug = ["stylus-sdk/debug"]
+
+# Recommended allocator for Stylus WASM
+mini-alloc = ["stylus-sdk/mini-alloc"]
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[profile.release]
+codegen-units = 1
+strip = true
+lto = true
+panic = "abort"
+
+# Optimize for performance and size
+opt-level = 3
